@@ -4,7 +4,8 @@ import json
 
 class SamsclubPipeline(object):
     """
-    write data to file json, Report's serve.
+    receive full detail of product then insert to result.json
+
     """
 
     def open_spider(self, spider):

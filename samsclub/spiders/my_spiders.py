@@ -1,9 +1,9 @@
+import datetime
 from bs4 import BeautifulSoup
-import os
 from ..settings import BASE_DIR
 from loginform import fill_login_form
+import os
 import time
-import datetime
 import re
 import requests
 import json
@@ -26,6 +26,15 @@ def get_item_links():
 
 
 class Each(scrapy.Spider):
+    """
+    working follow
+    - get all input link by: get_item_links()
+    - get detail of product by: self.get_detail()
+    - get arrives and cost then send data's colected to pipelines by: self.parse()
+    - handle even spider's close by: self.spider_closed()
+    - export to html file by self.export()
+    """
+
     name = 'colect_item'
     allowed_domains = ['samsclub.com']
     start_urls = get_item_links()
@@ -57,6 +66,10 @@ class Each(scrapy.Spider):
             TIME = str(int(time.time() * 1000))
             title, product_id, sku_id, status, price = self.get_detail(
                 url.rstrip())
+
+            if all(v is None for v in [title, product_id, sku_id, status, price]):
+                continue
+
             get_shipping_url = f"https://www.samsclub.com/sams/shop/product/moneybox/shippingDeliveryInfo.jsp?zipCode={ZIP_CODE}&productId={product_id}&skuId={sku_id}&status={status}&isSelectedZip=true&isLoggedIn=true&_={TIME}"
 
             item = {
@@ -66,27 +79,27 @@ class Each(scrapy.Spider):
                 "product_id": product_id,
                 "sku_id": sku_id
             }
+
             request = scrapy.Request(
                 get_shipping_url, meta={"item": item, "cookie_jar": cookieJar}, callback=self.parse)
             cookieJar.add_cookie_header(request)
-
             yield request
 
     def parse(self, response):
         item = response.meta['item']
-        try:
-            arrives = response.xpath(
-                '//table/tbody/tr/td[1]/text()').extract_first().strip()
-            try:
-                cost = response.xpath(
-                    '//table/tbody/tr/td[2]/span/text()').extract_first().strip()
-            except:
-                cost = response.xpath(
-                    '//table/tbody/tr/td[2]/text()').extract_first().strip()
-        except:
-            arrives = ""
-            cost = response.xpath(
-                '//table/tbody/tr/td[1]/text()').extract_first().strip()
+        list_arrives = response.xpath(
+            '/html/body/div[1]/table/tbody/tr')
+
+        arrives = [i.strip()
+                   for i in list_arrives.xpath('td[1]/text()').extract()]
+        list_cost = list_arrives.xpath('td[2]')
+        cost = []
+        for i in list_cost:
+            if len(i.xpath('span/text()').extract()) > 0:
+                cost.append(i.xpath('span/text()').extract_first().strip())
+
+            cost.append(i.xpath('text()').extract_first().strip())
+
         item['arrives'] = arrives
         item['cost'] = cost
 
@@ -96,19 +109,36 @@ class Each(scrapy.Spider):
 
         yield item
 
-    # actualy we can get data by requests. Sscrapy don't need to request and parse data, it take a double of time. We use re to handle data per each call.
+    # we can get data by requests. Sscrapy don't need to request and parse data, it take more time. We use re to handle data per each call.
     def get_detail(self, url):
+
         r = requests.get(url, timeout=5)
-        title = re.search('<title>(.+?)</title>', r.text).group(0)
-        product_id = re.search("'productId':'(.+?)'", r.text).group(1)
-        sku_id = re.search("mainFormSku(.+?) ", r.text).group(1)
-        status = re.search("data-onlinestatus=(.+?) ", r.text).group(1)
-        price = re.search('itemprop=price>(.+?)<', r.text).group(1)
+        try:
+            title = re.search('<title>(.+?)</title>', r.text).group(0)
+        except:
+            title = None
+        try:
+            product_id = re.search("'productId':'(.+?)'", r.text).group(1)
+        except:
+            product_id = re.search("/(.+?).", url).group(1)
+
+        try:
+            sku_id = re.search("mainFormSku(.+?) ", r.text).group(1)
+        except:
+            sku_id = None
+        try:
+            status = re.search("data-onlinestatus=(.+?) ", r.text).group(1)
+        except:
+            status = None
+        try:
+            price = re.search('itemprop=price>(.+?)<', r.text).group(1)
+        except:
+            price = None
 
         return (title, product_id, sku_id, status, price)
 
+    # send event spider close
     # handle for create Report HTML file when finish crawl's session
-
     def __init__(self):
         dispatcher.connect(self.spider_closed, signals.spider_closed)
 
@@ -185,9 +215,15 @@ class Each(scrapy.Spider):
                                     with tag('td'):
                                         doc.text(item['sku_id'])
                                     with tag('td'):
-                                        doc.text(item['arrives'])
+                                        for each_date in item['arrives']:
+                                            if len(each_date) > 1:
+                                                with tag('li'):
+                                                    doc.text(each_date)
                                     with tag('td'):
-                                        doc.text(item['cost'])
+                                        for each_cost in item['cost']:
+                                            if len(each_cost) > 1:
+                                                with tag('li'):
+                                                    doc.text(each_cost)
 
         return indent(doc.getvalue(),
                       indentation='    ',
